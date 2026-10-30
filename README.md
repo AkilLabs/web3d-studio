@@ -99,21 +99,6 @@ node skills/3d-web-design/scripts/audit_3d_code.mjs ./src
 python3 skills/3d-web-design/scripts/audit_3d_code.py ./src
 ```
 
-## Publishing to GitHub
-
-Unzip `3d-web-skills.zip`, initialize Git, and push to your new GitHub repository:
-
-```bash
-unzip 3d-web-skills.zip -d 3d-web-skills
-cd 3d-web-skills
-git init
-git add .
-git commit -m "feat: initial release of 3d-web-skills for Three.js and R3F"
-git branch -M main
-git remote add origin https://github.com/<your-github-username>/3d-web-skills.git
-git push -u origin main
-```
-
 ## License
 
 MIT
