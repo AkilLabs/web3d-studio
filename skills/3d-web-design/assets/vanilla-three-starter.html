@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vanilla Three.js High-Performance Starter</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #090a0f;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #f8fafc;
+      user-select: none;
+    }
+    #canvas-container {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .hud {
+      position: absolute;
+      top: 2rem;
+      left: 2rem;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .hud h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+    }
+    .hud p {
+      font-size: 0.875rem;
+      color: #94a3b8;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="hud">
+    <h1>Vanilla Three.js Scene</h1>
+    <p>Damped interaction &bull; Clamped DPR &bull; Zero loop allocations</p>
+  </div>
+  <div id="canvas-container"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // 1. Scene, Camera, and Clamped DPR Renderer (Standard #4)
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x090a0f, 0.04);
+
+    const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0, 5.5);
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance'
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Clamped DPR (Standard #4)
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    container.appendChild(renderer.domElement);
+
+    // 2. Studio Lighting Rig (Standard #8)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xfffbeb, 2.2);
+    keyLight.position.set(5, 8, 5);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 25;
+    keyLight.shadow.camera.left = -6;
+    keyLight.shadow.camera.right = 6;
+    keyLight.shadow.camera.top = 6;
+    keyLight.shadow.camera.bottom = -6;
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.8);
+    fillLight.position.set(-5, 2, 3);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.4);
+    rimLight.position.set(0, 6, -6);
+    scene.add(rimLight);
+
+    // 3. Physically Plausible Hero Artifact (Standard #7)
+    const artifactGroup = new THREE.Group();
+    scene.add(artifactGroup);
+
+    const coreGeometry = new THREE.IcosahedronGeometry(1.2, 8);
+    const coreMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x38bdf8,
+      metalness: 0.88,
+      roughness: 0.18, // Physical bounds (Standard #7)
+      clearcoat: 0.8,
+      clearcoatRoughness: 0.12,
+      reflectivity: 0.9
+    });
+    const coreMesh = new THREE.Mesh(coreGeometry, coreMaterial);
+    coreMesh.castShadow = true;
+    coreMesh.receiveShadow = true;
+    artifactGroup.add(coreMesh);
+
+    const ringGeometry = new THREE.TorusGeometry(1.85, 0.04, 32, 128);
+    const ringMaterial = new THREE.MeshStandardMaterial({
+      color: 0x94a3b8,
+      metalness: 0.92,
+      roughness: 0.22
+    });
+    const ringMesh = new THREE.Mesh(ringGeometry, ringMaterial);
+    ringMesh.castShadow = true;
+    artifactGroup.add(ringMesh);
+
+    // Shadow catcher floor
+    const floorGeometry = new THREE.PlaneGeometry(30, 30);
+    const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.35 });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -2.0;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // 4. Interaction State & Reduced-Motion Detection (Standard #5 & #12)
+    const state = {
+      pointerX: 0,
+      pointerY: 0,
+      targetScale: 1.0,
+      currentScale: 1.0,
+      isHovered: false,
+      isPressed: false,
+      reducedMotion: false
+    };
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    state.reducedMotion = mediaQuery.matches;
+    mediaQuery.addEventListener('change', (e) => {
+      state.reducedMotion = e.matches;
+    });
+
+    // 5. Pre-allocated Scratch Instances for Zero-Allocation Loop (Standard #3)
+    const clock = new THREE.Clock();
+    const raycaster = new THREE.Raycaster();
+    const mouseNorm = new THREE.Vector2(-999, -999);
+    const targetRotation = new THREE.Vector2(0, 0);
+
+    // Event Handlers
+    window.addEventListener('pointermove', (e) => {
+      mouseNorm.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouseNorm.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      state.pointerX = mouseNorm.x;
+      state.pointerY = mouseNorm.y;
+
+      // Raycast test for cursor pointer and hover state
+      raycaster.setFromCamera(mouseNorm, camera);
+      const intersects = raycaster.intersectObject(coreMesh);
+      state.isHovered = intersects.length > 0;
+      document.body.style.cursor = state.isHovered ? 'pointer' : 'auto';
+      state.targetScale = state.isPressed ? 0.93 : state.isHovered ? 1.06 : 1.0;
+    });
+
+    window.addEventListener('pointerdown', (e) => {
+      if (state.isHovered) {
+        state.isPressed = true;
+        state.targetScale = 0.93;
+      }
+    });
+
+    window.addEventListener('pointerup', () => {
+      state.isPressed = false;
+      state.targetScale = state.isHovered ? 1.06 : 1.0;
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    });
+
+    // 6. Zero-Allocation, Delta-Damped Render Loop (Standard #1 & #3)
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = clock.getDelta();
+      const motionFactor = state.reducedMotion ? 0.15 : 1.0;
+
+      // Pointer parallax target
+      targetRotation.x = -state.pointerY * 0.3 * motionFactor;
+      targetRotation.y = state.pointerX * 0.45 * motionFactor;
+
+      // Frame-rate independent exponential damping (Standard #1)
+      artifactGroup.rotation.x = THREE.MathUtils.damp(artifactGroup.rotation.x, targetRotation.x, 7, delta);
+      artifactGroup.rotation.y = THREE.MathUtils.damp(artifactGroup.rotation.y, targetRotation.y, 7, delta);
+
+      // Tactile scale damping
+      state.currentScale = THREE.MathUtils.damp(state.currentScale, state.targetScale, 14, delta);
+      coreMesh.scale.setScalar(state.currentScale);
+
+      // Idle rotation
+      ringMesh.rotation.x += delta * 0.4 * motionFactor;
+      ringMesh.rotation.y -= delta * 0.25 * motionFactor;
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
+

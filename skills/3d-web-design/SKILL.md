@@ -17,7 +17,8 @@ Load the relevant bundled resources based on the task:
 - `assets/r3f-scroll-landing-template.tsx`: Production React Three Fiber + Drei scroll-driven landing page template with damped camera choreography and HTML overlays.
 - `assets/r3f-rapier-game-template.tsx`: Production React Three Fiber + Rapier physics game template with keyboard controls, capsule player controller, and instanced collectibles.
 - `assets/vanilla-three-starter.html`: Self-contained single-file runnable Three.js HTML template with ES module import maps, damped interaction, and studio lighting for instant previewing.
-- `scripts/audit_3d_code.py`: Deterministic static analyzer that inspects `.tsx`, `.ts`, `.jsx`, `.js`, and `.html` files for 3D performance and motion anti-patterns (allocations in `useFrame`, missing DPR clamps, raw frame-dependent lerps, React state in render loops, and un-instanced mesh loops).
+- `scripts/audit_3d_code.mjs`: Fast zero-dependency Node.js static analyzer that inspects `.tsx`, `.ts`, `.jsx`, `.js`, and `.html` files for 3D performance and motion anti-patterns (allocations in `useFrame`, missing DPR clamps, raw frame-dependent lerps, React state in render loops, and un-instanced mesh loops).
+- `scripts/audit_3d_code.py`: Python static analyzer equivalent for CI/CD or Python-native environments.
 
 ## When to Use
 
@@ -34,14 +35,14 @@ Identify which archetype matches the user's request and load the matching refere
 
 1. **Interactive 3D Website / Scroll-Driven Landing Page**: Load `references/SCROLL_AND_CAMERA_CHOREOGRAPHY.md`, `references/SHADERS_LIGHTING_POSTPROCESSING.md`, and `assets/r3f-scroll-landing-template.tsx` (or `assets/vanilla-three-starter.html` if a standalone HTML preview is requested).
 2. **3D Browser Game / Physics Simulation**: Load `references/PHYSICS_AND_GAMES.md` and `assets/r3f-rapier-game-template.tsx`.
-3. **3D Code Review / Performance Audit**: Load `references/STANDARDS.md` and run `python3 scripts/audit_3d_code.py <path>` on the target codebase.
+3. **3D Code Review / Performance Audit**: Load `references/STANDARDS.md` and run `node scripts/audit_3d_code.mjs <path>` (or `python3 scripts/audit_3d_code.py <path>`) on the target codebase.
 
 ### Step 2: Isolate the Render Loop and Enforce Frame Budget
 
 A 3D interface loses its physical illusion the instant a frame drops. Keep the 60 to 120fps WebGL render loop decoupled from UI framework reconciliation:
 
-- **Never call React `setState` inside `useFrame`**: Mutate Three.js object refs (`meshRef.current.position`, `materialRef.current.uniforms`) directly inside `useFrame`. Restrict React state to discrete lifecycle events (`onPointerDown`, game over, level transitions).
-- **Zero heap allocations per frame**: Never instantiate `new THREE.Vector3()`, `new THREE.Quaternion()`, `new THREE.Matrix4()`, or `new THREE.Color()` inside `useFrame` or `requestAnimationFrame`. Pre-allocate scratch objects at module scope.
+- **Never call React `setState` inside `useFrame`**: Mutate Three.js object refs (`meshRef.current.position`, `materialRef.current.uniforms`) directly inside `useFrame`. Restrict React state to discrete lifecycle events (`onPointerDown`, game over, level transitions). For hover and pressed animations, read from mutable `useRef(false)` inside `useFrame` to avoid component re-renders.
+- **Zero heap allocations per frame**: Never instantiate `new THREE.Vector3()`, `new THREE.Quaternion()`, `new THREE.Matrix4()`, `new THREE.Color()`, or `new rapier.Ray()` inside `useFrame` or `requestAnimationFrame`. Pre-allocate scratch objects at module scope and reuse a memoized `groundRayRef` for physics queries.
 - **Clamp Device Pixel Ratio**: Always set `dpr={[1, 2]}` on `<Canvas>` or `renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))` so 3x and 4x mobile screens do not multiply fragment shader load by 9x to 16x.
 - **Instance repeated meshes**: Use `THREE.InstancedMesh` or Drei's `<Instances>` whenever rendering more than 50 identical geometries to keep total draw calls under 100 on desktop and under 50 on mobile.
 
@@ -67,8 +68,14 @@ Avoid the flat, artificial look of default WebGL scenes by grounding every surfa
 Before delivering generated or refactored 3D code files, run the bundled verification script:
 
 ```bash
+# Node.js (recommended for JavaScript/TypeScript environments)
+node skills/3d-web-design/scripts/audit_3d_code.mjs <path-to-file-or-dir>
+
+# Or Python 3
 python3 skills/3d-web-design/scripts/audit_3d_code.py <path-to-file-or-dir>
 ```
+
+Resolve all flagged `[BLOCK]` findings before presenting the final output.
 
 Resolve all flagged `[BLOCK]` findings before presenting the final output.
 

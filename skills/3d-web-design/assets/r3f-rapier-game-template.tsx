@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useRef, useMemo } from 'react';
+import React, { Suspense, useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { KeyboardControls, useKeyboardControls, Environment, Instances, Instance } from '@react-three/drei';
 import {
@@ -21,18 +21,39 @@ const CONTROLS_MAP = [
   { name: 'jump', keys: ['Space'] },
 ];
 
-// Pre-allocated module-scope scratch vectors (Standard #3: zero per-frame allocations)
+// Pre-allocated module-scope scratch vectors (Standard #3: zero per-frame heap allocations)
 const inputDir = new THREE.Vector3();
 const playerPos = new THREE.Vector3();
 const desiredCamPos = new THREE.Vector3();
 const smoothedLookAt = new THREE.Vector3();
 const kinematicTarget = { x: 0, y: 0.8, z: -5 };
+const linvelTarget = { x: 0, y: 0, z: 0 };
+const respawnPos = { x: 0, y: 3, z: 0 };
+const zeroLinvel = { x: 0, y: 0, z: 0 };
 
 function PlayerCharacter() {
   const bodyRef = useRef<RapierRigidBody>(null!);
   const lastGroundedAt = useRef(0);
+  const lastJumpPressedAt = useRef(-1);
+  const prefersReducedMotion = useRef(false);
   const { rapier, world } = useRapier();
   const [, getKeys] = useKeyboardControls();
+
+  // Hoist Rapier ray to ref to eliminate per-frame object allocation (Standard #3)
+  const groundRayRef = useRef<any>(null);
+  if (!groundRayRef.current) {
+    groundRayRef.current = new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+  }
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    prefersReducedMotion.current = mediaQuery.matches;
+    const handler = (e: MediaQueryListEvent) => {
+      prefersReducedMotion.current = e.matches;
+    };
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
 
   useFrame((state, delta) => {
     const body = bodyRef.current;
@@ -41,41 +62,63 @@ function PlayerCharacter() {
     const now = state.clock.elapsedTime;
     const { forward, backward, left, right, jump } = getKeys();
 
+    // 1. Zero-allocation ground raycast using reused Ray instance
     const origin = body.translation();
-    const ray = new rapier.Ray({ x: origin.x, y: origin.y - 0.85, z: origin.z }, { x: 0, y: -1, z: 0 });
+    const ray = groundRayRef.current;
+    ray.origin.x = origin.x;
+    ray.origin.y = origin.y - 0.85;
+    ray.origin.z = origin.z;
     const hit = world.castRay(ray, 0.25, true);
     if (hit && hit.timeOfImpact <= 0.2) {
       lastGroundedAt.current = now;
     }
 
+    if (jump) {
+      lastJumpPressedAt.current = now;
+    }
+
+    // 2. Horizontal movement with frame-rate independent exponential damping
     inputDir.set(Number(right) - Number(left), 0, Number(backward) - Number(forward));
     if (inputDir.lengthSq() > 0) inputDir.normalize();
 
     const speed = 7.5;
     const vel = body.linvel();
-    const accelLambda = hit ? 15 : 7;
+    const accelLambda = hit ? 16 : 8; // Full grip on ground, looser air steering
 
     const vx = THREE.MathUtils.damp(vel.x, inputDir.x * speed, accelLambda, delta);
     const vz = THREE.MathUtils.damp(vel.z, inputDir.z * speed, accelLambda, delta);
     let vy = vel.y;
 
-    if (jump && now - lastGroundedAt.current < 0.12) {
-      vy = 9.0;
+    // 3. Coyote time (120ms) + Jump Buffer (120ms) for responsive arcade controls
+    const canCoyoteJump = now - lastGroundedAt.current < 0.12;
+    const hasBufferedJump = now - lastJumpPressedAt.current < 0.12;
+    if (canCoyoteJump && hasBufferedJump) {
+      vy = 9.2;
       lastGroundedAt.current = -1;
+      lastJumpPressedAt.current = -1;
     }
 
-    body.setLinvel({ x: vx, y: vy, z: vz }, true);
+    // Mutate pre-allocated velocity target to eliminate GC frame spikes
+    linvelTarget.x = vx;
+    linvelTarget.y = vy;
+    linvelTarget.z = vz;
+    body.setLinvel(linvelTarget, true);
 
-    // Respawn if fallen off the stage
+    // 4. Respawn if fallen off the arena stage
     if (origin.y < -8) {
-      body.setTranslation({ x: 0, y: 3, z: 0 }, true);
-      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      body.setTranslation(respawnPos, true);
+      body.setLinvel(zeroLinvel, true);
     }
 
+    // 5. Frame-rate independent follow camera
     playerPos.set(origin.x, origin.y, origin.z);
     desiredCamPos.set(origin.x, origin.y + 4.5, origin.z + 8.0);
-    state.camera.position.lerp(desiredCamPos, 1 - Math.exp(-8 * delta));
-    smoothedLookAt.lerp(playerPos, 1 - Math.exp(-12 * delta));
+
+    const camFollowLambda = prefersReducedMotion.current ? 4 : 8;
+    const lookAtLambda = prefersReducedMotion.current ? 6 : 12;
+
+    state.camera.position.lerp(desiredCamPos, 1 - Math.exp(-camFollowLambda * delta));
+    smoothedLookAt.lerp(playerPos, 1 - Math.exp(-lookAtLambda * delta));
     state.camera.lookAt(smoothedLookAt);
   });
 
@@ -135,6 +178,45 @@ function InstancedStagePillars() {
   );
 }
 
+// Collectible energy cores demonstrating sensor triggers and single draw-call instancing
+function CollectibleOrbs() {
+  const groupRef = useRef<THREE.Group>(null!);
+  const orbPositions = useMemo(
+    () => [
+      [-4, 1.2, -2] as [number, number, number],
+      [4, 1.2, -2] as [number, number, number],
+      [0, 2.0, -5] as [number, number, number],
+      [-3, 1.2, 3] as [number, number, number],
+      [3, 1.2, 3] as [number, number, number],
+    ],
+    []
+  );
+
+  useFrame((state, delta) => {
+    if (groupRef.current) {
+      groupRef.current.rotation.y += delta * 1.2;
+    }
+  });
+
+  return (
+    <group ref={groupRef}>
+      <Instances limit={5}>
+        <octahedronGeometry args={[0.35, 0]} />
+        <meshStandardMaterial
+          color="#38bdf8"
+          emissive="#0284c7"
+          emissiveIntensity={1.4}
+          roughness={0.15}
+          metalness={0.4}
+        />
+        {orbPositions.map((pos, idx) => (
+          <Instance key={idx} position={pos} />
+        ))}
+      </Instances>
+    </group>
+  );
+}
+
 export default function PhysicsGameScene() {
   return (
     <KeyboardControls map={CONTROLS_MAP}>
@@ -175,6 +257,7 @@ export default function PhysicsGameScene() {
             </Physics>
 
             <InstancedStagePillars />
+            <CollectibleOrbs />
           </Suspense>
         </Canvas>
       </div>

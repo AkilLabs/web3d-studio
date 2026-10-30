@@ -40,6 +40,7 @@ const moveDir = new THREE.Vector3();
 const bodyWorldPos = new THREE.Vector3();
 const camTargetPos = new THREE.Vector3();
 const camLookTarget = new THREE.Vector3();
+const nextLinvel = { x: 0, y: 0, z: 0 };
 
 export function ArcadePlayer() {
   const bodyRef = useRef<RapierRigidBody>(null!);
@@ -48,6 +49,12 @@ export function ArcadePlayer() {
   const { rapier, world } = useRapier();
   const [, getKeys] = useKeyboardControls();
 
+  // Hoist Rapier ray to ref to eliminate per-frame object allocation (Standard #3)
+  const groundRayRef = useRef<any>(null);
+  if (!groundRayRef.current) {
+    groundRayRef.current = new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+  }
+
   useFrame((state, delta) => {
     const body = bodyRef.current;
     if (!body) return;
@@ -55,9 +62,12 @@ export function ArcadePlayer() {
     const now = state.clock.elapsedTime;
     const { forward, backward, left, right, jump } = getKeys();
 
-    // 1. Ground check via short downward raycast from capsule bottom
+    // 1. Zero-allocation ground check via reused raycast instance
     const origin = body.translation();
-    const ray = new rapier.Ray({ x: origin.x, y: origin.y - 0.85, z: origin.z }, { x: 0, y: -1, z: 0 });
+    const ray = groundRayRef.current;
+    ray.origin.x = origin.x;
+    ray.origin.y = origin.y - 0.85;
+    ray.origin.z = origin.z;
     const hit = world.castRay(ray, 0.25, true);
     if (hit && hit.timeOfImpact <= 0.2) {
       lastGroundedTime.current = now;
@@ -90,7 +100,11 @@ export function ArcadePlayer() {
       lastJumpPressedTime.current = -1;
     }
 
-    body.setLinvel({ x: nextVx, y: nextVy, z: nextVz }, true);
+    // Mutate pre-allocated velocity target to eliminate GC frame spikes
+    nextLinvel.x = nextVx;
+    nextLinvel.y = nextVy;
+    nextLinvel.z = nextVz;
+    body.setLinvel(nextLinvel, true);
 
     // 4. Smooth follow camera with zero per-frame allocations
     bodyWorldPos.set(origin.x, origin.y, origin.z);

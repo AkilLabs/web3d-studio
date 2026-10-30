@@ -42,6 +42,7 @@ These skills encode concrete, opinionated 3D design engineering decisions so AI 
     │   │   ├── r3f-rapier-game-template.tsx
     │   │   └── vanilla-three-starter.html
     │   └── scripts/
+    │       ├── audit_3d_code.mjs
     │       └── audit_3d_code.py
     ├── review-3d-scene/
     │   ├── SKILL.md
@@ -88,9 +89,13 @@ cp -r 3d-web-skills/skills/3d-web-design .cursor/skills/
 
 ### 4. Running the Deterministic 3D Code Auditor
 
-You can run the bundled static analysis script directly against any Three.js or React Three Fiber directory:
+You can run the bundled static analysis script directly against any Three.js or React Three Fiber directory using either Node.js or Python:
 
 ```bash
+# Node.js (recommended for JavaScript / TypeScript projects)
+node skills/3d-web-design/scripts/audit_3d_code.mjs ./src
+
+# Or Python 3
 python3 skills/3d-web-design/scripts/audit_3d_code.py ./src
 ```
 

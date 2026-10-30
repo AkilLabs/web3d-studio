@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useRef, useState } from 'react';
+import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import {
   ScrollControls,
@@ -19,19 +19,38 @@ function ChoreographedHeroArtifact() {
   const coreMeshRef = useRef<THREE.Mesh>(null!);
   const ringMeshRef = useRef<THREE.Mesh>(null!);
   const scroll = useScroll();
-  const [hovered, setHovered] = useState(false);
-  const [pressed, setPressed] = useState(false);
+
+  // Hoist interactive state to mutable refs to prevent React reconciliation during high-frequency gestures (Standard #2)
+  const hoveredRef = useRef(false);
+  const pressedRef = useRef(false);
+  const prefersReducedMotion = useRef(false);
+
+  useEffect(() => {
+    // Respect accessibility reduced-motion preference (Standard #12)
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    prefersReducedMotion.current = mediaQuery.matches;
+    const handler = (e: MediaQueryListEvent) => {
+      prefersReducedMotion.current = e.matches;
+    };
+    mediaQuery.addEventListener('change', handler);
+
+    return () => {
+      mediaQuery.removeEventListener('change', handler);
+      document.body.style.cursor = 'auto';
+    };
+  }, []);
 
   useFrame((state, delta) => {
     const r1 = scroll.range(0, 1 / 2);
     const r2 = scroll.range(1 / 2, 1 / 2);
+    const motionFactor = prefersReducedMotion.current ? 0.2 : 1.0;
 
     // Responsive horizontal shift so 3D object balances HTML typography
     const desktopOffset = state.viewport.width > 5 ? 1.45 : 0;
     const targetX = desktopOffset * (1 - r1 * 2 + r2 * 2);
     const targetY = -r1 * 0.4 + r2 * 0.3;
-    const targetRotY = scroll.offset * Math.PI * 2.2;
-    const targetRotZ = r1 * 0.6 - r2 * 0.4;
+    const targetRotY = scroll.offset * Math.PI * 2.2 * motionFactor;
+    const targetRotZ = (r1 * 0.6 - r2 * 0.4) * motionFactor;
 
     scrollGroupRef.current.position.x = THREE.MathUtils.damp(scrollGroupRef.current.position.x, targetX, 5, delta);
     scrollGroupRef.current.position.y = THREE.MathUtils.damp(scrollGroupRef.current.position.y, targetY, 5, delta);
@@ -39,39 +58,43 @@ function ChoreographedHeroArtifact() {
     scrollGroupRef.current.rotation.z = THREE.MathUtils.damp(scrollGroupRef.current.rotation.z, targetRotZ, 5, delta);
 
     // Independent pointer parallax with smooth velocity decay
-    const parallaxX = -state.pointer.y * 0.22;
-    const parallaxY = state.pointer.x * 0.32;
+    const parallaxX = -state.pointer.y * 0.22 * motionFactor;
+    const parallaxY = state.pointer.x * 0.32 * motionFactor;
     pointerGroupRef.current.rotation.x = THREE.MathUtils.damp(pointerGroupRef.current.rotation.x, parallaxX, 7, delta);
     pointerGroupRef.current.rotation.y = THREE.MathUtils.damp(pointerGroupRef.current.rotation.y, parallaxY, 7, delta);
 
-    // Tactile press/hover feedback on pointer-down
-    const targetScale = pressed ? 0.93 : hovered ? 1.05 : 1.0;
+    // Tactile press/hover feedback on pointer-down reading from ref (zero React state re-renders)
+    const targetScale = pressedRef.current ? 0.93 : hoveredRef.current ? 1.05 : 1.0;
     const nextScale = THREE.MathUtils.damp(coreMeshRef.current.scale.x, targetScale, 14, delta);
     coreMeshRef.current.scale.setScalar(nextScale);
 
     // Subtle orbital ring counter-rotation
-    ringMeshRef.current.rotation.x += delta * 0.35;
-    ringMeshRef.current.rotation.y -= delta * 0.25;
+    ringMeshRef.current.rotation.x += delta * 0.35 * motionFactor;
+    ringMeshRef.current.rotation.y -= delta * 0.25 * motionFactor;
   });
 
   return (
     <group ref={scrollGroupRef}>
       <group ref={pointerGroupRef}>
-        <Float speed={1.6} rotationIntensity={0.2} floatIntensity={0.35}>
+        <Float speed={prefersReducedMotion.current ? 0 : 1.6} rotationIntensity={0.2} floatIntensity={0.35}>
           <mesh
             ref={coreMeshRef}
             castShadow
             onPointerOver={() => {
-              setHovered(true);
+              hoveredRef.current = true;
               document.body.style.cursor = 'pointer';
             }}
             onPointerOut={() => {
-              setHovered(false);
-              setPressed(false);
+              hoveredRef.current = false;
+              pressedRef.current = false;
               document.body.style.cursor = 'auto';
             }}
-            onPointerDown={() => setPressed(true)}
-            onPointerUp={() => setPressed(false)}
+            onPointerDown={() => {
+              pressedRef.current = true;
+            }}
+            onPointerUp={() => {
+              pressedRef.current = false;
+            }}
           >
             <icosahedronGeometry args={[1.15, 6]} />
             <meshPhysicalMaterial
@@ -108,7 +131,7 @@ function StudioEnvironment() {
           <Lightformer form="ring" intensity={3} position={[10, 1, 0]} scale={8} color="#f8fafc" />
         </group>
       </Environment>
-      <ContactShadows position={[0, -2.1, 0]} opacity={0.4} scale={12} blur={2.4} far={4} />
+      <ContactShadows position={[0, -2.1, 0]} opacity={0.4} scale={12} blur={2.4} far={4} resolution={512} />
     </>
   );
 }

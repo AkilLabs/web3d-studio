@@ -13,21 +13,22 @@ from typing import List, Tuple
 Finding = Tuple[str, int, str, str, str, str]  # (file, line, std, before, after, why)
 
 ALLOCATION_RE = re.compile(
-    r"new\s+THREE\.(Vector[234]|Quaternion|Euler|Matrix[34]|Color|Raycaster|Box3|Sphere)\s*\("
+    r"new\s+(?:THREE\.(Vector[234]|Quaternion|Euler|Matrix[34]|Color|Raycaster|Box3|Sphere)|(?:rapier\.)?Ray|Array|Object)\s*\("
 )
 RAW_LERP_RE = re.compile(r"\+=\s*\([^)]*-\s*[^)]*\)\s*\*\s*0\.\d+")
 LERP_FIXED_RE = re.compile(r"\.lerp\(\s*[^,]+,\s*0\.\d+\s*\)")
 EXTREME_ROUGHNESS_RE = re.compile(r"roughness\s*[:=]\s*\{?\s*(0(\.0+)?|1(\.0+)?)\s*\}?(?:[\s,>}])")
+REACT_STATE_RE = re.compile(r"(?<![.\?])\bset[A-Z][a-zA-Z0-9_]*\s*\(")
 
 
 def extract_loop_blocks(lines: List[str]) -> List[Tuple[int, int]]:
     """Locate approximate line ranges of useFrame or requestAnimationFrame loops."""
     ranges: List[Tuple[int, int]] = []
     for idx, line in enumerate(lines):
-        if "useFrame(" in line or "useFrame (" in line or "function animate(" in line:
+        if any(marker in line for marker in ("useFrame(", "useFrame (", "function animate(", "const animate =")):
             brace_depth = 0
             started = False
-            for j in range(idx, min(len(lines), idx + 200)):
+            for j in range(idx, min(len(lines), idx + 250)):
                 for ch in lines[j]:
                     if ch == "{":
                         brace_depth += 1
@@ -69,9 +70,22 @@ def audit_file(path: pathlib.Path) -> List[Finding]:
                 ))
                 break
 
+    if "setPixelRatio(window.devicePixelRatio)" in text and "Math.min" not in text:
+        for idx, line in enumerate(lines):
+            if "setPixelRatio(window.devicePixelRatio)" in line:
+                findings.append((
+                    path.name,
+                    idx + 1,
+                    "Standard #4 (DPR Clamp)",
+                    line.strip(),
+                    "renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))",
+                    "Unbounded DPR overloads fragment shaders on 3x-4x mobile displays",
+                ))
+                break
+
     for idx, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("*"):
+        if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
             continue
 
         # Check allocations and React state inside render loops
@@ -82,10 +96,10 @@ def audit_file(path: pathlib.Path) -> List[Finding]:
                     idx + 1,
                     "Standard #3 (Zero Loop Allocations)",
                     stripped,
-                    "Hoist `const scratch = new THREE.Vector3()` to module scope",
+                    "Hoist scratch instances outside the component or loop scope",
                     "Allocating objects inside useFrame/animate triggers GC frame spikes",
                 ))
-            if re.search(r"(?<![.\?])\bset[A-Z][a-zA-Z0-9_]*\s*\(", line):
+            if REACT_STATE_RE.search(line):
                 findings.append((
                     path.name,
                     idx + 1,
